@@ -9,6 +9,9 @@ import random
 import string
 import pymongo
 import bson
+import requests
+import json
+from functools import wraps
 
 def random_agent():
     user_agent_list = [\
@@ -78,25 +81,54 @@ def str_to_datetime(datetime_str):
         pass
     raise ValueError('no valid date format found')
 
+    
+def get_proxy():
+    r = requests.get('http://127.0.0.1:8000/?types=0&country=国内')
+    ip_ports = json.loads(r.text)
+    selected_ip_port = random.choice(ip_ports)
+    ip = selected_ip_port[0]
+    port = selected_ip_port[1]
+    return '{ip}:{port}'.format(ip=ip, port=port)
 
+def delete_proxy(proxy):
+    requests.get('http://127.0.0.1:8000/delete?ip={0}'.format(proxy.split(':')[0]))
+
+def deal_with_error(func):
+    @wraps(func)
+    def wrapper(obj, resp):
+        if resp.status_code == 599:
+            print('Proxy inavlid.')
+            delete_proxy(obj.task['fetch']['proxy'])
+            resp.raise_for_status()
+        return func(obj, resp)
+    return wrapper
+    
 class Handler(BaseHandler):
     crawl_config = {
         #'headers': {
         #    'User-Agent': 'baiduspider',
         #    "Cookie": "bid=%s" % "".join(random.sample(string.ascii_letters + string.digits, 11))
         #}
+        #'proxy': '127.0.0.1:3128'
     }
 
+    def crawl(self, url, **params):
+        super().crawl(url, **params, proxy=get_proxy())
+    
     @every(minutes=24 * 60)
     def on_start(self):
         self.crawl('https://movie.douban.com/tag/?view=cloud', callback=self.index_page, headers=gen_headers(), cookies=random_bid())
 
+    @catch_status_code_error
     @config(age=10 * 24 * 60 * 60)
+    @deal_with_error
     def index_page(self, response):
         for each in response.doc('#content > div > div.article > div.indent.tag_cloud > table > tbody > tr > td > a').items():
             self.crawl(each.attr.href, callback=self.movie_list_page, headers=gen_headers(), cookies=random_bid())
 
+    @catch_status_code_error
     @config(priority=2)
+    @deal_with_error
     def movie_list_page(self, response):
         next_page = response.doc('#content > div > div.article > div.paginator > span.next > a')
         for movie_link in response.doc('#content div.pl2 > a').items():
@@ -104,8 +136,9 @@ class Handler(BaseHandler):
         if next_page and next_page.attr.href:
             self.crawl(next_page.attr.href, callback=self.movie_list_page,  headers=gen_headers(),cookies=random_bid())
             
-        
-    @config(priority=7)
+    @catch_status_code_error    
+    @config(priority=10)
+    @deal_with_error
     def movie_detail_page(self, response):
         self.get_reviews(response.url+'reviews')
         return {
@@ -121,11 +154,14 @@ class Handler(BaseHandler):
             'film_length': self.trim_suffix(response.doc('#info > span[property="v:runtime"]').text()),
         }
     
+    @catch_status_code_error
     @config(priority=4)
     def get_reviews(self, url):
         return self.crawl(url, callback=self.review_list, headers=gen_headers(), cookies=random_bid())
      
+    @catch_status_code_error
     @config(priority=5)
+    @deal_with_error
     def review_list(self, response):
         for a in response.doc('div.review-item > header > h3 > a').items():
             self.crawl(a.attr.href, callback=self.review_detail, headers=gen_headers(), cookies=random_bid())
@@ -134,7 +170,9 @@ class Handler(BaseHandler):
         if next_page and next_page.attr.href:
             self.crawl(next_page.attr.href, callback=self.review_list, headers=gen_headers(), cookies=random_bid())
      
+    @catch_status_code_error
     @config(priority=6)
+    @deal_with_error
     def review_detail(self, response):
         return {
            'refer': response.doc('header.main-hd >a:nth-child(2)').attr.href,
@@ -176,9 +214,3 @@ class Handler(BaseHandler):
               movies.update({'url': task['url']}, {'$set': result})
             else:
               movies.insert_one(result)
-    
-    @catch_status_code_error  
-    def on_error(self, response):
-       print('Crawl apge {0} with error: {1}'.format(response.url, response.status_code))
-       return
-                
