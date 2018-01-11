@@ -2,7 +2,7 @@
 使用Pyspider框架的豆瓣爬虫
 
 # 依赖:
-python第三方库：pyspider, pymongo  
+python第三方库：pyspider, pymongo, requests  
 数据库：mongodb  
 代理池：[IPProxy](https://github.com/qiyeboy/IPProxyPool)
 
