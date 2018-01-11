@@ -97,7 +97,7 @@ def deal_with_error(func):
     @wraps(func)
     def wrapper(obj, resp):
         if resp.status_code == 599:
-            print('Proxy inavlid.')
+            print('Proxy invalid.')
             delete_proxy(obj.task['fetch']['proxy'])
             resp.raise_for_status()
         return func(obj, resp)
